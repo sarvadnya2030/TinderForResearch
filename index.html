@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Paper Tinder</title>
+<style>
+:root{--bg:#f6f5f1;--fg:#1c1c1a;--card:#fff;--mut:#6b6b66;--yes:#1d9e5c;--no:#d6453d}
+@media(prefers-color-scheme:dark){:root{--bg:#161615;--fg:#eeede8;--card:#232321;--mut:#9a9a93}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;min-height:100vh;padding:16px;overflow-x:hidden}
+h1{margin:0 0 8px;font-size:1.3rem}form{display:flex;gap:8px;width:100%;max-width:440px;margin-bottom:12px}
+input{flex:1;padding:10px;border-radius:8px;border:1px solid var(--mut);background:var(--card);color:var(--fg);font:inherit}
+button{padding:10px 14px;border-radius:8px;border:0;background:var(--fg);color:var(--bg);font:inherit;cursor:pointer}
+#stack{position:relative;width:100%;max-width:440px;height:62vh;min-height:360px}
+.card{position:absolute;inset:0;background:var(--card);border-radius:16px;padding:20px;box-shadow:0 6px 24px #0002;overflow:auto;touch-action:pan-y;user-select:none;cursor:grab}
+.card h2{margin:0 0 6px;font-size:1.15rem;line-height:1.3}.meta{color:var(--mut);font-size:.85rem;margin-bottom:10px}
+.card p{margin:0;font-size:.95rem}.card a{color:inherit}
+#btns{display:flex;gap:24px;margin:14px 0}#btns button{width:64px;height:64px;border-radius:50%;font-size:1.6rem;padding:0;color:#fff}
+#no{background:var(--no)}#yes{background:var(--yes)}
+#msg{color:var(--mut);text-align:center;padding-top:30%}
+details{width:100%;max-width:440px}summary{cursor:pointer;color:var(--mut)}
+li{margin:6px 0}
+</style></head><body>
+<h1>📄 Paper Tinder</h1>
+<form id="f"><input id="q" placeholder="Topic, e.g. graph neural networks" required><button>Go</button></form>
+<div id="stack"><div id="msg">Search a topic, then swipe → to save, ← to skip<br>(or use ← / → keys)</div></div>
+<div id="btns"><button id="no" aria-label="skip">✕</button><button id="yes" aria-label="save">♥</button></div>
+<details id="saved"><summary>Saved (<span id="n">0</span>)</summary><ol id="list"></ol><button id="exp">Export .txt</button></details>
+<script>
+const $=id=>document.getElementById(id);
+const ls=(k,v)=>{try{return v===undefined?JSON.parse(localStorage[k]||'null'):localStorage[k]=JSON.stringify(v)}catch{return null}};
+let saved=ls('saved')||[], seen=new Set(ls('seen')||[]), queue=[], cursor='*', q='', loading=false;
+const esc=s=>(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const abs=w=>{const m=w.abstract_inverted_index;if(!m)return'';const a=[];for(const[k,ps]of Object.entries(m))ps.forEach(p=>a[p]=k);return a.join(' ')};
+
+async function load(){
+  if(loading||cursor==null)return;loading=true;
+  try{
+    const u=`https://api.openalex.org/works?search=${encodeURIComponent(q)}&filter=has_abstract:true,type:article|preprint&per-page=25&cursor=${encodeURIComponent(cursor)}&select=id,title,publication_year,authorships,abstract_inverted_index,doi,primary_location,cited_by_count`;
+    const r=await(await fetch(u)).json();cursor=r.meta.next_cursor;
+    queue.push(...r.results.filter(w=>w.title&&!seen.has(w.id)).map(w=>({id:w.id,title:w.title,year:w.publication_year,cites:w.cited_by_count,
+      authors:w.authorships.slice(0,4).map(a=>a.author.display_name).join(', ')+(w.authorships.length>4?' et al.':''),
+      abs:abs(w),url:w.doi||w.primary_location?.landing_page_url||w.id}));
+  }catch(e){$('msg')&&($('msg').textContent='Failed to load: '+e.message)}
+  loading=false;render();
+}
+function render(){
+  const s=$('stack');s.innerHTML='';
+  if(!queue.length){s.innerHTML=`<div id="msg">${loading?'Loading…':q?'No more papers. Try another topic.':'Search a topic to begin'}</div>`;return}
+  if(queue.length<5)load();
+  const p=queue[0],c=document.createElement('div');c.className='card';
+  c.innerHTML=`<h2>${esc(p.title)}</h2><div class="meta">${esc(p.authors)} · ${p.year} · ${p.cites} cites · <a href="${esc(p.url)}" target="_blank" rel="noopener">open ↗</a></div><p>${esc(p.abs)}</p>`;
+  let x0=null,dx=0;
+  c.onpointerdown=e=>{if(e.target.tagName=='A')return;x0=e.clientX;c.setPointerCapture(e.pointerId)};
+  c.onpointermove=e=>{if(x0==null)return;dx=e.clientX-x0;c.style.transform=`translateX(${dx}px) rotate(${dx/20}deg)`};
+  c.onpointerup=()=>{if(x0==null)return;x0=null;Math.abs(dx)>100?swipe(dx>0):(c.style.transform='');dx=0};
+  s.appendChild(c);
+}
+function swipe(yes){
+  const p=queue.shift();if(!p)return;seen.add(p.id);ls('seen',[...seen]);
+  if(yes){saved.push(p);ls('saved',saved);list()}
+  const c=document.querySelector('.card');
+  if(c){c.style.transition='transform .2s';c.style.transform=`translateX(${yes?600:-600}px)`}
+  setTimeout(render,180);
+}
+function list(){$('n').textContent=saved.length;$('list').innerHTML=saved.map(p=>`<li><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title)}</a> (${p.year})</li>`).join('')}
+$('f').onsubmit=e=>{e.preventDefault();q=$('q').value.trim();queue=[];cursor='*';render();load()};
+$('yes').onclick=()=>swipe(true);$('no').onclick=()=>swipe(false);
+document.onkeydown=e=>{if(e.target.tagName=='INPUT')return;if(e.key=='ArrowRight')swipe(true);if(e.key=='ArrowLeft')swipe(false)};
+$('exp').onclick=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([saved.map(p=>`${p.title} (${p.year})\n${p.url}\n`).join('\n')]));a.download='saved-papers.txt';a.click()};
+list();
+</script></body></html>
